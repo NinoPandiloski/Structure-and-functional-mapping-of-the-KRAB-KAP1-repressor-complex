@@ -1,0 +1,112 @@
+{
+  "__default__" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "18:20:00",
+    "N" : 1,
+    "partition" : "dell",
+    "tasks-per-node" : 20,
+    "J" : "%default_job",
+    "o" : "error_files/%j.out",
+    "e" : "error_files/%j.err"
+  },
+  "Mapping" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "48:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.map.out",
+    "e" : "error_files/%j.map.err",
+    "J" : "error_files/%j.map"
+  },
+  "indexing" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "08:00:00",
+    "N" : 1,
+    "tasks-per-node" : 10,
+    "partition" : "dell",
+    "o" : "error_files/%j.index.out",
+    "e" : "error_files/%j.index.err",
+    "J" : "error_files/%j.index"
+  },
+  "sam_to_bam" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "04:00:00",
+    "N" : 1,
+    "tasks-per-node" : 10,
+    "partition" : "dell",
+    "o" : "error_files/%j.samToBam.out",
+    "e" : "error_files/%j.samToBam.err",
+    "J" : "error_files/%j.samToBam"
+  },
+  "sam_filtering" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "04:00:00",
+    "N" : 1,
+    "tasks-per-node" : 10,
+    "partition" : "dell",
+    "o" : "error_files/%j.filter.out",
+    "e" : "error_files/%j.filter.err",
+    "J" : "error_files/%j.filter"
+  },
+  "bam_sorting" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "10:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.sorting.out",
+    "e" : "error_files/%j.sorting.err",
+    "J" : "error_files/%j.sorting"
+  },
+  "bam_to_bigwig" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "04:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.bigwig.out",
+    "e" : "error_files/%j.bigwig.err",
+    "J" : "error_files/%j.bigwig"
+  },
+  "Create_index" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "12:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.bigwig.out",
+    "e" : "error_files/%j.bigwig.err",
+    "J" : "error_files/%j.bigwig"
+  },
+  "HUSH_TE_transcripts" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "24:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.TEtrans.out",
+    "e" : "error_files/%j.TEtrans.err",
+    "J" : "error_files/%j.TEtrans"
+  },
+  "SEACR" :
+  {
+    "account" : "lsens2018-3-3",
+    "time" : "06:00:00",
+    "N" : 1,
+    "tasks-per-node" : 20,
+    "partition" : "dell",
+    "o" : "error_files/%j.SEACR.out",
+    "e" : "error_files/%j.SEACR.err",
+    "J" : "error_files/%j.SEACR"
+  }
+}

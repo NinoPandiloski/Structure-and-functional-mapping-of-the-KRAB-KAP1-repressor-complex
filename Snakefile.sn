@@ -1,0 +1,268 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+# Run as: snakemake -s Snakefile.sn -j 6 --cluster-config lunarc_config.json  --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.o} -e {cluster.e} -J {cluster.J} -N {cluster.N}" --latency-wait 120 --rerun-incomplete
+
+
+configfile: "Configurations.yaml"
+SAMPLES = config["Samples"]
+SEACR_SIGNALS = config["SEACR_Signals"]
+SEACR_CONTROLS = config["SEACR_Controls"]
+CR012_SAMPLES = config["CR012_Cambridge_samples"]
+CR013_SAMPLES =	config["CR013_Lund_samples"]
+NAMES = config["Sample_names"]
+TARGET_DIRS = config["Target_Dirs"]
+BACKGROUND_DIRS = config["Background_Dirs"]
+
+rule all:
+	input:
+		expand("Results/1_Mapping/{SAMPLE}.bw", SAMPLE = SAMPLES),
+		expand("Results/3_SEACR/{SAMPLE}.bed", SAMPLE = SAMPLES),
+		expand("Results/3_SEACR/{SAMPLE}.fragments.bedgraph", SAMPLE = SAMPLES),
+		expand("Results/3_SEACR/{SIGNAL}.stringent.bed", SIGNAL = SEACR_SIGNALS),
+		"Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb.stringent.bed",
+		expand("Results/4_HOMER/{NAME}_tag_dir/", NAME = NAMES),
+		expand("Results/4_HOMER/{TARGET_DIR}_vs_KKO_Peaks_FChange0.txt", TARGET_DIR = TARGET_DIRS),
+		"Results/5_Quantification/FeatureCounts/UniqueMap_TEtranscriptCount.csv"
+
+
+
+rule Cut_Adapters:
+	input:
+		forward = "Data/{SAMPLE}_R1_001.fastq.gz",
+		reverse = "Data/{SAMPLE}_R2_001.fastq.gz"
+	output:
+		forward = "Results/1_Mapping/cutadapt_{SAMPLE}_R1.fastq.gz",
+		reverse = "Results/1_Mapping/cutadapt_{SAMPLE}_R2.fastq.gz"
+	shell:
+		"""
+		ml GCCcore/10.3.0 cutadapt/3.4
+		cutadapt -b GATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG -B GATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG \
+		--cores=12 --overlap 10 --minimum-length=20 --quality-cutoff=10,10 --trim-n \
+		-o {output.forward} -p {output.reverse} \
+		{input.forward} {input.reverse}
+		module purge
+		"""
+
+## MAPPING the samples with Bowtie2
+rule Bowtie2_Mapping:
+	input:
+		forward = "Results/1_Mapping/cutadapt_{SAMPLE}_R1.fastq.gz",
+		reverse = "Results/1_Mapping/cutadapt_{SAMPLE}_R2.fastq.gz"
+	output:
+		"Results/1_Mapping/{SAMPLE}.sam"
+	params:
+		index="/projects/fs1/common/genome/lunarc/indicies/bowtie2/human/hg38/hg38",
+		parameters="--local --very-sensitive-local --no-unal --no-mixed --no-discordant --phred33 -I 10 -X 700"	
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 OpenMPI/3.1.1 Bowtie2/2.3.4.2
+		bowtie2 {params.parameters} -x {params.index} -1 {input.forward} -2 {input.reverse} -S {output}
+		module purge
+		"""
+
+rule Remove_Duplicates:
+	input:
+		"Results/1_Mapping/{SAMPLE}.sam"
+	output:
+		Sort = "Results/1_Mapping/{SAMPLE, \w+}_sorted.sam",
+		Deduplicate = "Results/1_Mapping/dedup.{SAMPLE, \w+}_sorted.sam",
+		DupMetrics = "Results/1_Mapping/dupMetrics_{SAMPLE}.txt"
+	shell:
+		"""
+		ml picard/2.6.0-Java-1.8.0_131
+		java -jar $EBROOTPICARD/picard.jar SortSam I={input} O={output.Sort} SORT_ORDER=coordinate
+		java -jar $EBROOTPICARD/picard.jar MarkDuplicates I={output.Sort} O={output.Deduplicate} M={output.DupMetrics} REMOVE_DUPLICATES=true
+		module purge
+		"""
+
+
+## Transforming SAMs to binary files - BAMs. Further filtering them according to their mapping quality (MAPQ >= 10)
+## to filter out alignments with low mapping scores - useful when working with Transposable Elements
+rule SAMtoBAM:
+	input:
+		"Results/1_Mapping/{SAMPLE}.sam"
+	output:
+		BAM = "Results/1_Mapping/{SAMPLE}.bam"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools view -bS {input} > {output.BAM}
+		module purge
+		"""
+
+rule SORTandFILTER_BAMs:
+	input:
+		"Results/1_Mapping/{SAMPLE}.bam"
+	output:
+		Sort = "Results/1_Mapping/{SAMPLE, w+}_sorted.bam",
+		Filter = "Results/1_Mapping/FilteredBAMs/{SAMPLE, \w+}_sorted.mapq10.bam"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools sort -o {output.Sort} {input}
+		samtools view -bq 10 {output.Sort} > {output.Filter}
+		"""
+
+
+rule Index_BAMs:
+	input:
+		index_bam = "Results/1_Mapping/{SAMPLE}_sorted.bam",
+		index_filtered = "Results/1_Mapping/FilteredBAMs/{SAMPLE}_sorted.mapq10.bam"
+	output:
+		indexed_bam = "Results/1_Mapping/{SAMPLE}_sorted.bam.bai",
+		indexed_filtered = "Results/1_Mapping/FilteredBAMs/{SAMPLE, \w+}_sorted.mapq10.bam.bai"
+	shell:
+		"""
+		ml GCC/7.3.0-2.30 SAMtools/1.9
+		samtools index -b {input.index_bam}
+		samtools index -b {input.index_filtered}
+		module purge
+		"""
+
+#Transforming the BAMs to BigWigs
+rule BamtoBigwig:
+	input:
+		"Results/1_Mapping/{SAMPLE}_sorted.bam.bai",
+		BAM = "Results/1_Mapping/{SAMPLE}_sorted.bam",
+		Filtered_BAM = "Results/1_Mapping/FilteredBAMs/{SAMPLE}_sorted.mapq10.bam"
+	output:
+		BW = "Results/1_Mapping/{SAMPLE}.bw",
+		Filtered_BW = "Results/1_Mapping/FilteredBAMs/{SAMPLE}_mapq10.bw"
+	params:
+		normalize="normalizeUsingRPKM"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+		bamCoverage -b {input.BAM} -o {output.BW} --{params.normalize}
+		bamCoverage -b {input.Filtered_BAM} -o {output.Filtered_BW} --{params.normalize}
+		module purge
+		"""
+
+##Preparing the BAMs for peak calling with SEACR and by transforming them to BEDgraphs
+rule BamtoBed:
+	input:
+		"Results/1_Mapping/{SAMPLE}_sorted.bam"
+	output:
+		"Results/3_SEACR/{SAMPLE}.bed"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		bedtools bamtobed -bedpe -i {input} > {output}
+		module purge
+		"""
+rule sortBed:
+	input:
+		"Results/3_SEACR/{SAMPLE}.bed"
+	output:
+		clean = "Results/3_SEACR/{SAMPLE}.clean.bed",
+		fragments = "Results/3_SEACR/{SAMPLE}.fragments.bed"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26 OpenMPI/1.10.3 BEDTools/2.26.0
+		awk '$1==$4 && $6-$2 < 1000 {{print $0}}' {input} > {output.clean}
+		cut -f 1,2,6 {output.clean} | sort -k1,1 -k2,2n -k3,3n > {output.fragments}
+		module purge
+		"""
+
+rule BedtoBedgraph:
+	input:
+		"Results/3_SEACR/{SAMPLE}.fragments.bed"
+	output:
+		"Results/3_SEACR/{SAMPLE}.fragments.bedgraph"
+	params:
+		index = "/projects/fs1/common/genome/lunarc/genomes/human/hg38/hg38.chrom.sizes.txt"
+	shell:
+		"""
+		ml GCC/5.4.0-2.26  OpenMPI/1.10.3 BEDTools/2.26.0
+		bedtools genomecov -bg -i {input} -g {params.index} > {output}
+		module purge
+		"""
+
+
+rule SEACR:
+	input:
+		expand("Results/3_SEACR/{SIGNAL}.fragments.bedgraph", SIGNAL = SEACR_SIGNALS),
+		expand("Results/3_SEACR/{CONTROL}.fragments.bedgraph", CONTROL = SEACR_CONTROLS)
+	output:
+		expand("Results/3_SEACR/{SIGNAL}.stringent.bed", SIGNAL = SEACR_SIGNALS)
+	run:
+		for i in range(len(config["SEACR_Signals"])):
+			sign = config["SEACR_Signals"][i]
+			cont = config["SEACR_Controls"][i]
+			shell("ml GCC/8.2.0-2.31.1 OpenMPI/3.1.3 R/3.6.0; echo {sign}; bash /projects/fs1/nino/bin/SEACR_1.3.sh Results/3_SEACR/{sign}.fragments.bedgraph\
+			 Results/3_SEACR/{cont}.fragments.bedgraph norm stringent Results/3_SEACR/{sign}")
+
+## Manual merging of the peaks: We take the common peaks in the Parents and WT_complemented samples and create a merge file.
+## In addition we filter the peaks by size where we only consider the peaks >1000 bp
+rule mergePeaks:
+	input:
+		Parent = "Results/3_SEACR/Parent_D1_HEK293.stringent.bed",
+		WTcomp = "Results/3_SEACR/WTcomp_D3_HEK293.stringent.bed"
+	output:
+		Merged_peaks = "Results/3_SEACR/Parent-WTcomp_mergedPeaks.stringent.bed",
+		Merged_1kb_peaks = "Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb.stringent.bed",
+		Unique_1kb_peaks = "Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb_unique.stringent.bed"
+	shell:
+		"""
+		ml GCC/10.2.0 BEDTools/2.30.0
+		intersectBed -wb -a {input.Parent} -b {input.WTcomp} > {output.Merged_peaks}
+		awk -F"\t" '{{if ($3 - $2 > 1000) print $0}}' {output.Merged_peaks} >> {output.Merged_1kb_peaks}
+		sort -u -k1,1 -k2,2n -k3,3n {output.Merged_1kb_peaks} > {output.Unique_1kb_peaks}
+		module purge
+		"""
+
+## Quantification of H3K9me3 enrichment found over the peaks using HOMER
+rule createTagDirs:
+	input:
+		CR012_samples = expand("Results/1_Mapping/FilteredBAMs/{CR012_SAMPLE}_sorted.mapq10.bam", CR012_SAMPLE = CR012_SAMPLES),
+		CR013_samples = expand("Results/1_Mapping/FilteredBAMs/{CR013_SAMPLE}_sorted.mapq10.bam", CR013_SAMPLE = CR013_SAMPLES)
+	output:
+		expand("Results/4_HOMER/{NAME}_tag_dir/", NAME = NAMES)
+	run:
+		for i in range(len(config["CR012_Cambridge_samples"])):
+			CR012 = config["CR012_Cambridge_samples"][i]
+			CR013 = config["CR013_Lund_samples"][i]
+			name = config["Sample_names"][i]
+			shell("ml GCC/7.3.0-2.30 homer/4.10;\
+				makeTagDirectory Results/4_HOMER/{wildcards.name}_tag_dir/ Results/1_Mapping/FilteredBAMs/{wildcards.CR012}_mapq10.sorted.bam \
+				Results/1_Mapping/FilteredBAMs/{wildcards.CR013}1_mapq10.sorted.bam; module purge")
+
+
+rule HOMER_DiffPeak:
+	input:
+		target = expand("Results/4_HOMER/{TARGET_DIR}_tag_dir/", TARGET_DIR = TARGET_DIRS),
+		background = expand("Results/4_HOMER/{BACKGROUND_DIR}_tag_dir/", BACKGROUND_DIR = BACKGROUND_DIRS)
+	output:
+		"Results/4_HOMER/{TARGET_DIRS}_vs_KKO_Peaks_FChange0.txt",
+		"Results/4_HOMER/KKO_vs_{TARGET_DIRS}_Peaks_FChange0.txt",
+		"Results/4_HOMER/{TARGET_DIRS}_vs_KKO_TEs_FChange0.txt"
+	params:
+		Unique_1kb_peaks = "Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb_unique.stringent.bed",
+		TEs = "/projects/fs1/nino/Indices/all_Retrotransposons_GRCh38_GENCODE_MH.bed"
+	run:
+		for i in range(len(config["Target_Dirs"])):
+			target = config["Target_Dirs"][i]
+			back = config["Background_Dirs"][i]
+			shell("ml GCC/7.3.0-2.30 homer/4.10; getDifferentialPeaks Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb_unique.stringent.bed \
+			Results/4_HOMER/{target}_tag_dir/ Results/4_HOMER/{back}_tag_dir/ -F 0 > Results/4_HOMER/{target}_vs_KKO_HOMER_Peaks_FChange0.txt;\
+			getDifferentialPeaks Results/3_SEACR/Parent-WTcomp_mergedPeaks_1kb_unique.stringent.bed \
+			Results/4_HOMER/{back}_tag_dir/ Results/4_HOMER/{target}_tag_dir/ -F 0 > Results/4_HOMER/KKO_vs_{target}_HOMER_Peaks_FChange0.txt;\
+			getDifferentialPeaks /projects/fs1/nino/Indices/all_Retrotransposons_GRCh38_GENCODE_MH.bed \
+			Results/4_HOMER/{target}_tag_dir/ Results/4_HOMER/{back}_tag_dir/ -F 0 > Results/4_HOMER/{target}_vs_KKO_TEs_FChange0.txt;\
+			module purge")
+
+rule FeatureCounts:
+	input:
+		CR012_samples = expand("Results/1_Mapping/FilteredBAMs/{CR012_SAMPLE}_sorted.mapq10.bam", CR012_SAMPLE = CR012_SAMPLES),
+		CR013_samples = expand("Results/1_Mapping/FilteredBAMs/{CR013_SAMPLE}_sorted.mapq10.bam", CR013_SAMPLE = CR013_SAMPLES)
+	output:
+		UniqTEs = "Results/5_Quantification/FeatureCounts/UniqueMap_TEtranscriptCount.csv"
+	shell:
+		"""
+		module load GCC/7.3.0-2.30 OpenMPI/3.1.1 Subread/1.6.3
+		featureCounts -s2 -F GTF -a /projects/fs1/nino/Indices/GRCh38_GENCODE_rmsk_TE.gtf -o {output} {input}
+		module purge
+		"""
